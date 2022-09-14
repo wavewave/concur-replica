@@ -1,6 +1,6 @@
 module Concur.Replica.Run where
 
-import           Concur.Core                     (SuspendF(StepView, StepIO, StepBlock, StepSTM, Forever), Widget, step)
+import           Concur.Core                     (SuspendF(..), Widget, step)
 
 import           Control.Monad.Free              (Free(Pure, Free))
 import           Control.Concurrent.STM          (atomically)
@@ -26,10 +26,43 @@ runDefault port title widget
   $ R.app (defaultIndex title []) defaultConnectionOptions id (step <$> widget) stepWidget
 
 -- | No need to use this directly if you're using 'run' or 'runDefault'.
-stepWidget :: R.Context -> (R.Context -> Free (SuspendF HTML) a) -> IO (Maybe (HTML, R.Context -> Free (SuspendF HTML) a, R.Event -> Maybe (IO ())))
+stepWidget ::
+  R.Context ->
+  (R.Context -> Free (SuspendF HTML) a) ->
+  IO
+    ( Maybe
+        ( Either
+            (R.Context -> Free (SuspendF HTML) a, HTML -> R.Event -> Maybe (IO ()))
+            (HTML, R.Context -> Free (SuspendF HTML) a, R.Event -> Maybe (IO ()))
+        )
+    )
 stepWidget ctx v = case v ctx of
   Pure _                   -> pure Nothing
-  Free (StepView new next) -> pure $ Just (new, const next, \event -> fireEvent new (R.evtPath event) (R.evtType event) (DOMEvent $ R.evtEvent event))
+  Free (StepView new next) ->
+    pure $
+      Just $
+        Right
+          ( new
+          , const next
+          , \event ->
+              fireEvent
+                new
+                (R.evtPath event)
+                (R.evtType event)
+                (DOMEvent $ R.evtEvent event)
+          )
+  Free (StepOnlyEvent next) ->
+    pure $
+      Just $
+        Left
+          ( const next
+          , \html event ->
+              fireEvent
+                html
+                (R.evtPath event)
+                (R.evtType event)
+                (DOMEvent $ R.evtEvent event)
+          )
   Free (StepIO io next)    -> io >>= stepWidget ctx . \r _ -> next r
   Free (StepBlock io next) -> io >>= stepWidget ctx . \r _ -> next r
   Free (StepSTM stm next)  -> atomically stm >>= stepWidget ctx . \r _ -> next r
